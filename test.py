@@ -6,25 +6,22 @@ JULIUS_TOKEN = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InJoM0dwdVZXd2JMMTJp
 # Initialize the client
 julius = Julius(api_key=JULIUS_TOKEN)
 
-try:
-    # Send a message to Julius
-    response = julius.chat.completions.create(
-        messages=[
-            {"role": "system", "content": "You are a helpful data scientist."},
-            {"role": "user", "content": "What's the best way to handle missing data?"}
-        ]
-    )
-    
-    # Print just the response text
-    print("\nResponse:")
-    print("=" * 50)
-    print(response.message.content)
-    
-    # Print metadata if you want it
-    print("\nMetadata:")
-    print("=" * 50)
-    print(f"Conversation ID: {response.id}")
-    print(f"Model: {response.model}")
-    
-except Exception as e:
-    print(f"Error: {str(e)}")
+# Send a message to Julius (try with a non-default model)
+response = julius.chat.completions.create(
+    model="cohere",  # It will automatically fall back to default if needed
+    messages=[
+        {"role": "system", "content": "You are a helpful data scientist."},
+        {"role": "user", "content": "List down the conditions for Overfitting and Underfitting."}
+    ]
+)
+
+# Print response
+print("\nResponse:")
+print("=" * 50)
+print(response.message.content)
+
+# Print metadata
+print("\nMetadata:")
+print("=" * 50)
+print(f"Conversation ID: {response.id}")
+print(f"Model: {response.model}")
