@@ -45,7 +45,7 @@ def send_message():
         return jsonify({"error": "Failed to start conversation."}), 500
 
     # Step 2: Send the user prompt (which now captures & stores multiple JSON chunks)
-    parsed_chunks, output_file = post_message(conversation_id, user_prompt, JULIUS_TOKEN)
+    parsed_chunks, output_file, final_output = post_message(conversation_id, user_prompt, JULIUS_TOKEN)
 
     if not parsed_chunks:
         return jsonify({"error": "Failed to send message or parse chunks."}), 500
@@ -53,7 +53,8 @@ def send_message():
     return jsonify({
         "conversation_id": conversation_id,
         "parsed_chunks": parsed_chunks,
-        "saved_file": output_file
+        "saved_file": output_file,
+        "final_output": final_output
     })
 
 
@@ -110,10 +111,11 @@ def post_message(conversation_id: str, prompt: str, token: str):
     resp = requests.post(url, headers=headers, json=payload)
     if resp.status_code != 200:
         print("post_message error:", resp.status_code, resp.text)
-        return ([], "")
+        return ([], "", "")
 
     # Instead of resp.json(), parse multiple JSON objects from resp.text
     resp_text = resp.text
+    final_output = ""
 
     parsed_chunks = []
     for line in resp_text.splitlines():
@@ -135,7 +137,14 @@ def post_message(conversation_id: str, prompt: str, token: str):
 
     print(f"Saved {len(parsed_chunks)} chunk(s) to {filename}")
 
-    return (parsed_chunks, filename)
+    final_output = ""
+    for chunk in parsed_chunks:
+        if chunk.get("role") == "assistant" or chunk.get("role") == "":
+            content = chunk.get("content", "")
+            if content:
+                final_output += content
+
+    return (parsed_chunks, filename, final_output)
 
 
 if __name__ == "__main__":
