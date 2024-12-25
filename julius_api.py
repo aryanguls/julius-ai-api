@@ -43,94 +43,98 @@ class ChatCompletions:
         self.client = client
 
     def create(self, 
-               messages: List[Dict[str, str]], 
-               model: ModelType = "default",
-               **kwargs) -> JuliusResponse:
+           messages: List[Dict[str, str]], 
+           model: ModelType = "default",
+           **kwargs) -> JuliusResponse:
         """
-        Create a chat completion with Julius.
-
-        Args:
-            messages: List of message dictionaries with 'role' and 'content'
-            model: Model to use. Available models:
-                - default
-                - GPT-4o
-                - gpt-4o-mini
-                - o1-mini
-                - claude-3-5-sonnet
-                - o1
-                - gemini
-                - cohere
-            **kwargs: Additional arguments for future compatibility
-
-        Note:
-            Model availability depends on your subscription plan.
-            Some models may require higher tier subscriptions.
+        Create a chat completion with Julius using sequential messaging.
+        
+        First sends system prompt to establish conversation, then sends
+        user messages one by one in order to maintain conversation flow.
         """
         try:
-            # Check if non-default model is requested and subscription exists
-            if model != "default":
-                if not hasattr(self.client, 'subscription') or self.client.subscription is None:
-                    print(f"Model '{model}' is not available on your current plan. Using default model.")
-                    model = "default"
-                else:
-                    try:
-                        # First set the model preference
-                        self.client.set_model_preference(model)
-                    except requests.exceptions.HTTPError:
-                        print(f"Model '{model}' is not available on your current plan. Using default model.")
-                        model = "default"
-
+            # Separate system and user messages
+            system_msg = None
+            user_messages = []
+            
+            for msg in messages:
+                if msg["role"] == "system":
+                    system_msg = msg["content"]
+                elif msg["role"] == "user":
+                    user_messages.append(msg["content"])
+            
+            # Start conversation with system prompt
             conversation_id = self._start_conversation()
-            last_message = messages[-1]["content"]
-
-            headers = {
-                **self.client.headers,
-                "conversation-id": conversation_id
-            }
             
-            payload = {
-                "message": {"content": last_message},
-                "provider": model if model != "default" else "default",  # Use model name for non-default models
-                "chat_mode": "auto",
-                "client_version": "20240130",
-                "theme": "light"
-            }
-
-            response = requests.post(
-                f"{self.client.base_url}/api/chat/message",
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()
-
-            # Parse chunks and build final response
-            content = ""
-            chunks = []
+            if system_msg:
+                # Send system prompt first
+                headers = {
+                    **self.client.headers,
+                    "conversation-id": conversation_id
+                }
+                
+                system_payload = {
+                    "message": {"content": system_msg},
+                    "provider": model if model != "default" else "default",
+                    "chat_mode": "auto",
+                    "client_version": "20240130",
+                    "theme": "light"
+                }
+                
+                response = requests.post(
+                    f"{self.client.base_url}/api/chat/message",
+                    headers=headers,
+                    json=system_payload
+                )
+                response.raise_for_status()
             
-            for line in response.text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    chunk = json.loads(line)
-                    chunks.append(chunk)
-                    if chunk.get("role") in ["assistant", ""]:
-                        if chunk_content := chunk.get("content"):
-                            content += chunk_content
-                except json.JSONDecodeError:
-                    continue
+            # Now send each user message in sequence
+            final_content = ""
+            for user_msg in user_messages:
+                headers = {
+                    **self.client.headers,
+                    "conversation-id": conversation_id
+                }
+                
+                user_payload = {
+                    "message": {"content": user_msg},
+                    "provider": model if model != "default" else "default",
+                    "chat_mode": "auto",
+                    "client_version": "20240130",
+                    "theme": "light"
+                }
+                
+                response = requests.post(
+                    f"{self.client.base_url}/api/chat/message",
+                    headers=headers,
+                    json=user_payload
+                )
+                response.raise_for_status()
+                
+                # Parse response chunks
+                for line in response.text.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        if chunk.get("role") in ["assistant", ""]:
+                            if chunk_content := chunk.get("content"):
+                                final_content += chunk_content
+                    except json.JSONDecodeError:
+                        continue
 
-            # Create response object
+            # Create final response object
             julius_message = JuliusMessage(
                 role="assistant",
-                content=content
+                content=final_content
             )
             
             choice = Choice(
                 index=0,
                 message=julius_message
             )
-
+            
             return JuliusResponse(
                 id=conversation_id,
                 choices=[choice],
