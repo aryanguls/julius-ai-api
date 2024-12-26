@@ -17,13 +17,14 @@ except Exception as e:
 # Now try with chat
 try:
     response = julius.chat.completions.create(
-        model="GPT-4o",
+        model="o1-mini",
         messages=[
             {"role": "system", "content": "You are a helpful data scientist."},
             {
                 "role": "user",
-                "content": "Please analyze this JSON file.",
-                "file_path": file_path
+                "content": "Please analyze this JSON file and find me the number of conversation ID's.",
+                "file_path": file_path,
+                "advanced_reasoning": True
             }
         ]
     )

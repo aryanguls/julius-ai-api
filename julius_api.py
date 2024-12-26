@@ -154,105 +154,94 @@ class ChatCompletions:
     def __init__(self, client):
         self.client = client
 
+    def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool):
+        """Send a message maintaining the current advanced reasoning state."""
+        headers = {
+            **self.client.headers,
+            "conversation-id": conversation_id
+        }
+
+        # Handle file attachment if present
+        new_attachments = {}
+        if "file_path" in message:
+            filename = self.client.files.upload(message["file_path"])
+            self._register_file_source(conversation_id, filename)
+            new_attachments = {
+                filename: {
+                    "name": filename,
+                    "isUploading": False
+                }
+            }
+
+        # Prepare base payload
+        payload = {
+            "message": {"content": message["content"]},
+            "provider": model if model != "default" else "default",
+            "chat_mode": "auto",
+            "client_version": "20240130",
+            "theme": "light",
+            "dataframe_format": "json",
+            "new_attachments": new_attachments,
+            "new_images": []
+        }
+
+        # If advanced_reasoning is True in current state, include it
+        if current_reasoning_state:
+            payload["advanced_reasoning"] = True
+
+        response = requests.post(
+            f"{self.client.base_url}/api/chat/message",
+            headers=headers,
+            json=payload,
+            stream=True
+        )
+        response.raise_for_status()
+        return response
+
     def create(self, 
             messages: List[Dict[str, Any]], 
             model: ModelType = "default",
             **kwargs) -> JuliusResponse:
-        """
-        Create a chat completion with Julius using sequential messaging.
-        
-        Args:
-            messages: List of message dictionaries with 'role', 'content', and optionally 'file_path'
-            model: Model to use
-            **kwargs: Additional arguments
-        """
         try:
-            # 1. Start conversation first
             conversation_id = self._start_conversation(model)
             
-            # Separate messages
+            # Track advanced reasoning state
+            current_reasoning_state = False
+            
+            # Separate system and user messages
             system_msg = None
             user_messages = []
             
             for msg in messages:
                 if msg["role"] == "system":
-                    system_msg = msg["content"]
+                    system_msg = msg
+                    # Update reasoning state from system message if specified
+                    if "advanced_reasoning" in msg:
+                        current_reasoning_state = msg["advanced_reasoning"]
+                        if current_reasoning_state:
+                            self.client.set_advanced_reasoning(True)
                 elif msg["role"] == "user":
                     user_messages.append(msg)
             
-            # 2. Send system message if present
+            # Send system message if present
             if system_msg:
-                headers = {
-                    **self.client.headers,
-                    "conversation-id": conversation_id
-                }
-                
-                system_payload = {
-                    "message": {"content": system_msg},
-                    "provider": model if model != "default" else "default",
-                    "chat_mode": "auto",
-                    "client_version": "20240130",
-                    "theme": "light",
-                    "dataframe_format": "json"
-                }
-                
-                response = requests.post(
-                    f"{self.client.base_url}/api/chat/message",
-                    headers=headers,
-                    json=system_payload,
-                    stream=True
-                )
-                response.raise_for_status()
-                
-                # Clear any system message response
+                response = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
                 for line in response.iter_lines():
                     continue
             
-            # 3. Send user messages sequentially
+            # Send user messages sequentially
             final_content = ""
             for user_msg in user_messages:
-                headers = {
-                    **self.client.headers,
-                    "conversation-id": conversation_id
-                }
+                # Update reasoning state if explicitly specified
+                if "advanced_reasoning" in user_msg:
+                    current_reasoning_state = user_msg["advanced_reasoning"]
+                    if current_reasoning_state:
+                        self.client.set_advanced_reasoning(True)
+                    else:
+                        self.client.set_advanced_reasoning(False)
                 
-                # Handle file if present
-                new_attachments = {}
-                if "file_path" in user_msg:
-                    # Upload file
-                    filename = self.client.files.upload(user_msg["file_path"])
-                    
-                    # Register as source
-                    self._register_file_source(conversation_id, filename)
-                    
-                    # Add to attachments
-                    new_attachments = {
-                        filename: {
-                            "name": filename,
-                            "isUploading": False
-                        }
-                    }
-
-                # Prepare message payload
-                user_payload = {
-                    "message": {"content": user_msg["content"]},
-                    "provider": model if model != "default" else "default",
-                    "chat_mode": "auto",
-                    "client_version": "20240130",
-                    "theme": "light",
-                    "dataframe_format": "json",
-                    "new_attachments": new_attachments,
-                    "new_images": []
-                }
-                
-                # Send message with streaming
-                response = requests.post(
-                    f"{self.client.base_url}/api/chat/message",
-                    headers=headers,
-                    json=user_payload,
-                    stream=True
-                )
-                response.raise_for_status()
+                # Send message with current state
+                response = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
                 
                 # Process streaming response
                 for line in response.iter_lines():
@@ -266,7 +255,6 @@ class ChatCompletions:
                     except json.JSONDecodeError:
                         continue
 
-            # Create final response
             return JuliusResponse(
                 id=conversation_id,
                 choices=[Choice(
@@ -342,6 +330,23 @@ class Julius:
         except Exception:
             self.subscription = None
         self.chat = type('Chat', (), {'completions': ChatCompletions(self)})()
+
+    def set_advanced_reasoning(self, enabled: bool = True):
+        """Set advanced reasoning mode preference."""
+        try:
+            response = requests.patch(
+                f"{self.base_url}/api/user_preferences",
+                headers=self.headers,
+                json={
+                    "preferences": {
+                        "advanced_reasoning": enabled
+                    }
+                }
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            raise Exception(f"Failed to set advanced reasoning: {str(e)}")
 
     def _get_subscription(self) -> JuliusSubscription:
         """Get current subscription details."""
