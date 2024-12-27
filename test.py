@@ -14,23 +14,26 @@ if not JULIUS_TOKEN:
 julius = Julius(api_key=JULIUS_TOKEN)
 
 def main():
-    file_path = "eval_sets/Titanic.xlsx"
+    file_paths = ["eval_sets/NBA Stats 202425 All Metrics  NBA Player Props Tool.csv", "eval_sets/EDGE_GEOCODE_PUBLIC_FILEDOC.pdf", "eval_sets/Titanic.xlsx"]
+    
     try:
-        uploaded_filename = julius.files.upload(file_path)
-        print(f"Successfully uploaded file: {uploaded_filename}")
+        # You can still upload files individually if needed
+        for file_path in file_paths:
+            uploaded_filename = julius.files.upload(file_path)
+            print(f"Successfully uploaded file: {uploaded_filename}")
     except Exception as e:
         print(f"Upload failed: {str(e)}")
 
-    # Now try with chat
+    # Now try with chat using multiple files
     try:
         response = julius.chat.completions.create(
             model="default",
             messages=[
-                {"role": "system", "content": "You are a helpful data scientist analyzing ship data."},
+                {"role": "system", "content": "You are a helpful data scientist analyzing documents."},
                 {
                     "role": "user",
-                    "content": "Please analyze this file and find me some stats on the most popular demographic on the titanic. Also draw any coorelations you canfind for me.",
-                    "file_path": file_path,
+                    "content": f"Please analyze the file(s) I have shared and show any statistical similarities you see between these 2 different pieces of data.",
+                    "file_paths": file_paths,  # Changed from file_path to file_paths
                     "advanced_reasoning": True
                 }
             ]

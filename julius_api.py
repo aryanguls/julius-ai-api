@@ -152,7 +152,6 @@ class Files:
             if not preprocess_response.get('success'):
                 raise Exception("File preprocessing failed")
                 
-            time.sleep(2)
             return normalized_filename
 
         except Exception as e:
@@ -163,7 +162,7 @@ class ChatCompletions:
         self.client = client
 
     def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool):
-        """Send a message with improved file handling."""
+        """Send a message with support for multiple file attachments."""
         try:
             headers = {
                 **self.client.headers,
@@ -171,16 +170,16 @@ class ChatCompletions:
             }
 
             new_attachments = {}
-            if "file_path" in message:
-                filename = self.client.files.upload(message["file_path"])
-                time.sleep(2)
-                register_response = self._register_file_source(conversation_id, filename)
-                new_attachments = {
-                    filename: {
+            if "file_paths" in message:  # Changed from file_path to file_paths
+                for file_path in message["file_paths"]:  # Handle multiple files
+                    filename = self.client.files.upload(file_path)
+                    time.sleep(2)
+                    register_response = self._register_file_source(conversation_id, filename)
+                    new_attachments[filename] = {
                         "name": filename,
-                        "isUploading": False
+                        "isUploading": False,
+                        "percentComplete": 100  # Added as seen in the request
                     }
-                }
 
             payload = {
                 "message": {"content": message["content"]},
@@ -190,7 +189,8 @@ class ChatCompletions:
                 "theme": "light",
                 "dataframe_format": "json",
                 "new_attachments": new_attachments,
-                "new_images": []
+                "new_images": [],
+                "selectedModels": None  # Added as seen in the request
             }
 
             if current_reasoning_state:

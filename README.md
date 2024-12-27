@@ -13,8 +13,8 @@ cd julius-ai-api
 1. Go to [Julius AI](https://julius.ai)
 2. Sign up or log in to your account
 3. Navigate to the chatbot window
-4. Right click on the screen and select the inspect option from the dropdown (which should open the Developer window for your browser)
-5. Navigate to the Network tab from the topion on the top of the screen 
+4. Right click on the screen and select the inspect option from the dropdown (which should open the Developer console for your browser)
+5. Navigate to the Network tab from the options on the top of the developer console window
 6. In the Network logs click on any of the logs that is of type 'fetch' (current, status, usage etc etc) and scroll down to the Request Header section.
 7. Copy the value of the Authorization key without the 'Bearer' text - this is your Julius token!
 
