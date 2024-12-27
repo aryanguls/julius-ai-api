@@ -1,3 +1,5 @@
+# julius_api.py
+
 from typing import List, Dict, Optional, Any, Literal, BinaryIO
 import requests
 import json
@@ -5,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 import mimetypes
+import time
 
 # Actual model names from Julius
 ModelType = Literal["default", "GPT-4o", "gpt-4o-mini", "o1-mini", "claude-3-5-sonnet", "o1", "gemini", "cohere"]
@@ -44,11 +47,16 @@ class Files:
     def __init__(self, client):
         self.client = client
 
+    def _normalize_filename(self, filename: str) -> str:
+        """Normalize filename to match server's format."""
+        return ' '.join(word for word in filename.split() if word)
+
     def get_signed_url(self, filename: str, mime_type: str) -> Dict:
         """Get signed URL for file upload."""
         try:
+            normalized_filename = self._normalize_filename(filename)
             payload = {
-                "filename": filename,
+                "filename": normalized_filename,
                 "mimeType": mime_type
             }
             
@@ -60,7 +68,7 @@ class Files:
             response.raise_for_status()
             data = response.json()
             
-            if 'signedUrl' not in data:  # Changed from 'url' to 'signedUrl'
+            if 'signedUrl' not in data:
                 raise Exception(f"No signed URL in response: {data}")
                 
             return data
@@ -71,10 +79,11 @@ class Files:
             raise Exception(f"Error in signed URL request: {str(e)}")
 
     def preprocess_file(self, filename: str) -> Dict:
-        """Preprocess uploaded file."""
+        """Preprocess uploaded file with response validation."""
         try:
+            normalized_filename = self._normalize_filename(filename)
             payload = {
-                "filename": filename,
+                "filename": normalized_filename,
                 "conversationId": None,
                 "analyze": True
             }
@@ -84,8 +93,17 @@ class Files:
                 headers=self.client.headers,
                 json=payload
             )
-            response.raise_for_status()
-            return response.json()
+            
+            response_data = response.json()
+            
+            if not response_data.get('success'):
+                raise Exception("Preprocess response indicates failure")
+                
+            if not response_data.get('res', {}).get('success'):
+                raise Exception("Preprocess result indicates failure")
+            
+            return response_data
+            
         except requests.exceptions.RequestException as e:
             raise Exception(f"Error preprocessing file: {str(e)}")
 
@@ -112,42 +130,32 @@ class Files:
             if not os.path.exists(file_path):
                 raise Exception(f"File not found: {file_path}")
                 
-            filename = os.path.basename(file_path)
+            original_filename = os.path.basename(file_path)
+            normalized_filename = self._normalize_filename(original_filename)
             mime_type = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
 
-            # Get signed URL with better error handling
-            try:
-                signed_url_response = self.get_signed_url(filename, mime_type)
-                upload_url = signed_url_response.get('signedUrl')  # Changed from 'url' to 'signedUrl'
-                
-                if not upload_url:
-                    raise Exception("No signed URL in response")
-                    
-            except Exception as e:
-                raise Exception(f"Failed to get signed URL: {str(e)}")
-
-            # Upload file to signed URL
-            try:
-                with open(file_path, 'rb') as f:
-                    upload_response = requests.put(
-                        upload_url, 
-                        data=f, 
-                        headers={'Content-Type': mime_type}
-                    )
-                    upload_response.raise_for_status()
-            except Exception as e:
-                raise Exception(f"Failed to upload file: {str(e)}")
-
-            # Preprocess file
-            try:
-                self.preprocess_file(filename)
-            except Exception as e:
-                raise Exception(f"Failed to preprocess file: {str(e)}")
+            signed_url_response = self.get_signed_url(normalized_filename, mime_type)
+            upload_url = signed_url_response.get('signedUrl')
             
-            return filename
+            if not upload_url:
+                raise Exception("No signed URL in response")
+
+            with open(file_path, 'rb') as f:
+                upload_response = requests.put(
+                    upload_url, 
+                    data=f, 
+                    headers={'Content-Type': mime_type}
+                )
+                upload_response.raise_for_status()
+
+            preprocess_response = self.preprocess_file(normalized_filename)
+            if not preprocess_response.get('success'):
+                raise Exception("File preprocessing failed")
+                
+            time.sleep(2)
+            return normalized_filename
 
         except Exception as e:
-            print(f"Debug - Full error: {str(e)}")  # Added debug print
             raise Exception(f"Error in file upload process: {str(e)}")
 
 class ChatCompletions:
@@ -155,121 +163,51 @@ class ChatCompletions:
         self.client = client
 
     def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool):
-        """Send a message maintaining the current advanced reasoning state."""
-        headers = {
-            **self.client.headers,
-            "conversation-id": conversation_id
-        }
-
-        # Handle file attachment if present
-        new_attachments = {}
-        if "file_path" in message:
-            filename = self.client.files.upload(message["file_path"])
-            self._register_file_source(conversation_id, filename)
-            new_attachments = {
-                filename: {
-                    "name": filename,
-                    "isUploading": False
-                }
+        """Send a message with improved file handling."""
+        try:
+            headers = {
+                **self.client.headers,
+                "conversation-id": conversation_id
             }
 
-        # Prepare base payload
-        payload = {
-            "message": {"content": message["content"]},
-            "provider": model if model != "default" else "default",
-            "chat_mode": "auto",
-            "client_version": "20240130",
-            "theme": "light",
-            "dataframe_format": "json",
-            "new_attachments": new_attachments,
-            "new_images": []
-        }
+            new_attachments = {}
+            if "file_path" in message:
+                filename = self.client.files.upload(message["file_path"])
+                time.sleep(2)
+                register_response = self._register_file_source(conversation_id, filename)
+                new_attachments = {
+                    filename: {
+                        "name": filename,
+                        "isUploading": False
+                    }
+                }
 
-        # If advanced_reasoning is True in current state, include it
-        if current_reasoning_state:
-            payload["advanced_reasoning"] = True
+            payload = {
+                "message": {"content": message["content"]},
+                "provider": model if model != "default" else "default",
+                "chat_mode": "auto",
+                "client_version": "20240130",
+                "theme": "light",
+                "dataframe_format": "json",
+                "new_attachments": new_attachments,
+                "new_images": []
+            }
 
-        response = requests.post(
-            f"{self.client.base_url}/api/chat/message",
-            headers=headers,
-            json=payload,
-            stream=True
-        )
-        response.raise_for_status()
-        return response
+            if current_reasoning_state:
+                payload["advanced_reasoning"] = True
 
-    def create(self, 
-            messages: List[Dict[str, Any]], 
-            model: ModelType = "default",
-            **kwargs) -> JuliusResponse:
-        try:
-            conversation_id = self._start_conversation(model)
-            
-            # Track advanced reasoning state
-            current_reasoning_state = False
-            
-            # Separate system and user messages
-            system_msg = None
-            user_messages = []
-            
-            for msg in messages:
-                if msg["role"] == "system":
-                    system_msg = msg
-                    # Update reasoning state from system message if specified
-                    if "advanced_reasoning" in msg:
-                        current_reasoning_state = msg["advanced_reasoning"]
-                        if current_reasoning_state:
-                            self.client.set_advanced_reasoning(True)
-                elif msg["role"] == "user":
-                    user_messages.append(msg)
-            
-            # Send system message if present
-            if system_msg:
-                response = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
-                for line in response.iter_lines():
-                    continue
-            
-            # Send user messages sequentially
-            final_content = ""
-            for user_msg in user_messages:
-                # Update reasoning state if explicitly specified
-                if "advanced_reasoning" in user_msg:
-                    current_reasoning_state = user_msg["advanced_reasoning"]
-                    if current_reasoning_state:
-                        self.client.set_advanced_reasoning(True)
-                    else:
-                        self.client.set_advanced_reasoning(False)
-                
-                # Send message with current state
-                response = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
-                
-                # Process streaming response
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line.decode('utf-8'))
-                        if chunk.get("role") in ["assistant", ""]:
-                            if chunk_content := chunk.get("content", ""):
-                                final_content += chunk_content
-                    except json.JSONDecodeError:
-                        continue
-
-            return JuliusResponse(
-                id=conversation_id,
-                choices=[Choice(
-                    index=0,
-                    message=JuliusMessage(
-                        role="assistant",
-                        content=final_content
-                    )
-                )],
-                created=int(datetime.now().timestamp()),
-                model=model
+            response = requests.post(
+                f"{self.client.base_url}/api/chat/message",
+                headers=headers,
+                json=payload,
+                stream=True
             )
-
+            
+            response.raise_for_status()
+            return response
+            
         except Exception as e:
-            raise Exception(f"Error in chat completion: {str(e)}")
+            raise Exception(f"Error in send_message: {str(e)}")
 
     def _register_file_source(self, conversation_id: str, filename: str):
         """Register a file as a source for the conversation."""
@@ -279,12 +217,17 @@ class ChatCompletions:
                 "conversation-id": conversation_id
             }
             
+            payload = {"file_name": filename}
+            
             response = requests.post(
                 f"{self.client.base_url}/api/chat/sources",
                 headers=headers,
-                json={"file_name": filename}
+                json=payload
             )
-            response.raise_for_status()
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to register file source: {response.text}")
+                
             return response.json()
         except Exception as e:
             raise Exception(f"Failed to register file source: {str(e)}")
@@ -313,6 +256,67 @@ class ChatCompletions:
             return data.get("id", "")
         except requests.exceptions.RequestException as e:
             raise Exception(f"Error starting conversation: {str(e)}")
+
+    def create(self, messages: List[Dict[str, Any]], model: ModelType = "default", **kwargs) -> JuliusResponse:
+        """Create a chat completion."""
+        try:
+            conversation_id = self._start_conversation(model)
+            current_reasoning_state = False
+            system_msg = None
+            user_messages = []
+            
+            for msg in messages:
+                if msg["role"] == "system":
+                    system_msg = msg
+                    if "advanced_reasoning" in msg:
+                        current_reasoning_state = msg["advanced_reasoning"]
+                        if current_reasoning_state:
+                            self.client.set_advanced_reasoning(True)
+                elif msg["role"] == "user":
+                    user_messages.append(msg)
+            
+            if system_msg:
+                response = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
+                for line in response.iter_lines():
+                    continue
+            
+            final_content = ""
+            for user_msg in user_messages:
+                if "advanced_reasoning" in user_msg:
+                    current_reasoning_state = user_msg["advanced_reasoning"]
+                    if current_reasoning_state:
+                        self.client.set_advanced_reasoning(True)
+                    else:
+                        self.client.set_advanced_reasoning(False)
+                
+                response = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
+                
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        if chunk.get("role") in ["assistant", ""]:
+                            if chunk_content := chunk.get("content", ""):
+                                final_content += chunk_content
+                    except json.JSONDecodeError:
+                        continue
+
+            return JuliusResponse(
+                id=conversation_id,
+                choices=[Choice(
+                    index=0,
+                    message=JuliusMessage(
+                        role="assistant",
+                        content=final_content
+                    )
+                )],
+                created=int(datetime.now().timestamp()),
+                model=model
+            )
+
+        except Exception as e:
+            raise Exception(f"Error in chat completion: {str(e)}")
 
 class Julius:
     def __init__(self, api_key: str):
