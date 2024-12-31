@@ -166,20 +166,30 @@ class ChatCompletions:
         self.client = client
         self.code_counter = 0  # Global counter for code files
 
-    def _save_code_to_file(self, code: str) -> str:
-        """Save code to a txt file and return the filename."""
+    def _save_code_and_output(self, code: str, outputs: list) -> tuple[str, str]:
+        """Save code and its corresponding outputs to separate files and return their filenames."""
         folder_path = "./outputs"
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
-        self.code_counter += 1  # Increment counter
-        filename = f"outputs/generated_code_{self.code_counter}.txt"
-        try:
-            with open(filename, 'w') as f:
-                f.write(code)
-            return filename
-        except Exception as e:
-            print(f"Error saving code: {str(e)}")
-            return None
+            
+        self.code_counter += 1
+        
+        # Save code file
+        code_filename = f"outputs/generated_code_{self.code_counter}.txt"
+        with open(code_filename, 'w') as f:
+            f.write(code)
+            
+        # Save output file
+        output_filename = f"outputs/generated_output_{self.code_counter}.txt"
+        with open(output_filename, 'w') as f:
+            # Format each output entry
+            for output in outputs:
+                if isinstance(output, dict):
+                    f.write(json.dumps(output, indent=2) + "\n")
+                else:
+                    f.write(str(output) + "\n")
+                    
+        return code_filename, output_filename
     
     def _sanitize_code(self, code: str) -> str:
         """Remove any double python key wrapping."""
@@ -190,17 +200,17 @@ class ChatCompletions:
             pass
         return code
 
-    def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict]]:
-        """Process a chunk from the stream and return content, function call, and images."""
+    def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict], List]:
+        """Process a chunk from the stream and return content, function call, images, and outputs."""
         content = chunk.get('content', '')
         function_call = chunk.get('function_call', '')
-        outputs = chunk.get('outputs', [])  # Add this line to capture outputs
+        outputs = chunk.get('outputs', [])
         
         # Extract any image URLs from the chunk
         images = {}
         if 'image_urls_dict' in chunk:
             images = chunk['image_urls_dict']
-        elif 'image_urls' in chunk:  # Add this to capture image_urls format
+        elif 'image_urls' in chunk:
             for i, url in enumerate(chunk['image_urls']):
                 images[f"image_{i}"] = url
         elif isinstance(function_call, dict) and 'arguments' in function_call:
@@ -211,7 +221,7 @@ class ChatCompletions:
             except json.JSONDecodeError:
                 pass
                 
-        return content, function_call, images, outputs  # Return outputs too
+        return content, function_call, images, outputs
 
     def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool) -> Dict[str, Any]:
         """Enhanced send_message with cleaner output handling."""
@@ -260,7 +270,7 @@ class ChatCompletions:
             current_content = ""
             code_blocks = []
             accumulated_function = ""
-            accumulated_output = ""
+            accumulated_outputs = []
             
             for line in response.iter_lines():
                 if not line:
@@ -272,7 +282,7 @@ class ChatCompletions:
                     
                     # Handle outputs
                     if outputs:
-                        accumulated_output += "\n".join(str(output) for output in outputs) + "\n"
+                        accumulated_outputs.extend(outputs)
                     
                     # Accumulate content 
                     if content:
@@ -286,35 +296,35 @@ class ChatCompletions:
                     
                     # Handle images
                     if images:
-                        # Add image info to output
-                        accumulated_output += f"\nGenerated images:\n"
-                        # Ensure outputs directory exists
-                        os.makedirs("outputs", exist_ok=True)
+                        image_info = {"image_urls": images}
+                        accumulated_outputs.append(image_info)
                         
+                        # Save images to outputs directory
+                        os.makedirs("outputs", exist_ok=True)
                         for img_id, url in images.items():
-                            accumulated_output += f"Image {img_id}: {url}\n"
                             try:
                                 response = requests.get(url)
                                 if response.status_code == 200:
                                     img = Image.open(BytesIO(response.content))
-                                    # Save to outputs directory
                                     save_path = os.path.join("outputs", f"output_{img_id}.png")
                                     img.save(save_path)
-                                    accumulated_output += f"Saved as {save_path}\n"
+                                    accumulated_outputs.append(f"Saved image as {save_path}")
                             except Exception as e:
-                                accumulated_output += f"Error saving image: {str(e)}\n"
+                                accumulated_outputs.append(f"Error saving image: {str(e)}")
                                 
                 except json.JSONDecodeError:
                     continue
             
-            # Process accumulated code at the end
+            # Process accumulated code and outputs at the end
             if accumulated_function:
                 try:
-                    code_filename = self._save_code_to_file(accumulated_function)
-                    output_filename = self._save_output_to_file(accumulated_output)
+                    code_filename, output_filename = self._save_code_and_output(
+                        accumulated_function, 
+                        accumulated_outputs
+                    )
                     current_content += f"\nCode saved to: {code_filename}\n"
-                    current_content += f"\nOutput saved to: {output_filename}\n"
-                    code_blocks.append((code_filename, accumulated_function, output_filename, accumulated_output))
+                    current_content += f"Output saved to: {output_filename}\n"
+                    code_blocks.append((code_filename, accumulated_function, output_filename, accumulated_outputs))
                 except Exception as e:
                     current_content += f"\nError saving code/output: {str(e)}\n"
                     
@@ -404,8 +414,9 @@ class ChatCompletions:
                 response_data = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
                 final_content += response_data['content']
                 if response_data.get('code_blocks'):
-                    for filename, code in response_data['code_blocks']:
-                        final_content += f"\nSystem code: {filename}"
+                    for code_filename, code, output_filename, outputs in response_data['code_blocks']:
+                        final_content += f"\nSystem code: {code_filename}"
+                        final_content += f"\nSystem output: {output_filename}"
             
             # Process user messages
             for user_msg in user_messages:
@@ -419,8 +430,9 @@ class ChatCompletions:
                 response_data = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
                 final_content += response_data['content']
                 if response_data.get('code_blocks'):
-                    for filename, code in response_data['code_blocks']:
-                        final_content += f"\nGenerated code: {filename}"
+                    for code_filename, code, output_filename, outputs in response_data['code_blocks']:
+                        final_content += f"\nGenerated code: {code_filename}"
+                        final_content += f"\nOutput file: {output_filename}"
 
             # Create and return the final response
             return JuliusResponse(

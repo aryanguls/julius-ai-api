@@ -1,0 +1,22 @@
+Highest correlations:
+
+[JULIUS_TABLE]: "{\"columns\":[0],\"index\":[[\"P+R\",\"P+R+A\"],[\"P+R+A\",\"P+R\"]],\"data\":[[0.9920044901],[0.9920044901]]}"
+
+Highest correlations:
+
+[JULIUS_TABLE]: "{\"columns\":[0],\"index\":[[\"P+R\",\"P+R+A\"],[\"P+R+A\",\"P+R\"]],\"data\":[[0.9920044901],[0.9920044901]]}"
+
+<Figure size 2000x1200 with 1 Axes>
+{
+  "image_urls": {
+    "image_0": "https://api.chatwithyourdata.io/images/caa95c31-09f3-4993-8d3c-e0dd7317a424.png"
+  }
+}
+Saved image as outputs/output_image_0.png
+<Figure size 2000x1200 with 1 Axes>
+{
+  "image_urls": {
+    "image_0": "https://api.chatwithyourdata.io/images/caa95c31-09f3-4993-8d3c-e0dd7317a424.png"
+  }
+}
+Saved image as outputs/output_image_0.png
