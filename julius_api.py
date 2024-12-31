@@ -174,31 +174,29 @@ class ChatCompletions:
             
         self.code_counter += 1
         
-        # Save code file
+        # Save code file with python key
         code_filename = f"outputs/generated_code_{self.code_counter}.txt"
         with open(code_filename, 'w') as f:
-            f.write(code)
-            
+            f.write(json.dumps({"python": self._sanitize_code(code)}))
+        
+        # Process and deduplicate outputs
+        processed_outputs = []
+        seen_outputs = set()
+        for output in outputs:
+            # Convert output to string for deduplication
+            output_str = json.dumps(output) if isinstance(output, dict) else str(output)
+            if output_str not in seen_outputs:
+                seen_outputs.add(output_str)
+                # Only include actual outputs, skip file saving messages
+                if not any(skip in output_str for skip in ['Saved image as', 'Error saving']):
+                    processed_outputs.append(output)
+        
         # Save output file
         output_filename = f"outputs/generated_output_{self.code_counter}.txt"
         with open(output_filename, 'w') as f:
-            # Format each output entry
-            for output in outputs:
-                if isinstance(output, dict):
-                    f.write(json.dumps(output, indent=2) + "\n")
-                else:
-                    f.write(str(output) + "\n")
-                    
+            f.write(json.dumps({"output": processed_outputs}, indent=2))
+            
         return code_filename, output_filename
-    
-    def _sanitize_code(self, code: str) -> str:
-        """Remove any double python key wrapping."""
-        try:
-            while isinstance(code, str) and code.startswith('{"python":'):
-                code = json.loads(code)["python"]
-        except json.JSONDecodeError:
-            pass
-        return code
 
     def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict], List]:
         """Process a chunk from the stream and return content, function call, images, and outputs."""
@@ -222,6 +220,79 @@ class ChatCompletions:
                 pass
                 
         return content, function_call, images, outputs
+
+    def _handle_stream_response(self, response: requests.Response, max_retries: int = 3) -> tuple[str, List, str, List]:
+        """Handle streaming response with retry logic and better error handling."""
+        current_content = ""
+        accumulated_function = ""
+        accumulated_outputs = []
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                        
+                    try:
+                        chunk = json.loads(line.decode('utf-8'))
+                        content, function_call, images, outputs = self._process_stream_chunk(chunk)
+                        
+                        # Handle outputs
+                        if outputs:
+                            accumulated_outputs.extend(outputs)
+                        
+                        # Accumulate content 
+                        if content:
+                            current_content += content
+                            
+                        # Handle function calls
+                        if function_call:
+                            if isinstance(function_call, dict) and function_call.get('arguments'):
+                                if '"python":' in function_call['arguments']:
+                                    accumulated_function += function_call['arguments']
+                        
+                        # Handle images by just storing their URLs
+                        if images:
+                            image_info = {"image_urls": images}
+                            accumulated_outputs.append(image_info)
+                            
+                            # Save images silently
+                            os.makedirs("outputs", exist_ok=True)
+                            for img_id, url in images.items():
+                                try:
+                                    img_response = requests.get(url)
+                                    if img_response.status_code == 200:
+                                        img = Image.open(BytesIO(img_response.content))
+                                        save_path = os.path.join("outputs", f"output_{img_id}.png")
+                                        img.save(save_path)
+                                except Exception:
+                                    pass
+                                    
+                    except json.JSONDecodeError:
+                        continue
+                        
+                # If we get here, processing was successful
+                break
+                
+            except (requests.exceptions.ChunkedEncodingError, 
+                    requests.exceptions.ConnectionError, 
+                    requests.exceptions.StreamConsumedError) as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise Exception(f"Failed to process stream after {max_retries} attempts: {str(e)}")
+                time.sleep(1)  # Wait before retrying
+                
+        return current_content, accumulated_outputs, accumulated_function, []
+    
+    def _sanitize_code(self, code: str) -> str:
+        """Remove any double python key wrapping."""
+        try:
+            while isinstance(code, str) and code.startswith('{"python":'):
+                code = json.loads(code)["python"]
+        except json.JSONDecodeError:
+            pass
+        return code
 
     def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool) -> Dict[str, Any]:
         """Enhanced send_message with cleaner output handling."""

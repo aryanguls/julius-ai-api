@@ -1,1 +1,1 @@
-{"python": "# Check available files in the current directory\nimport os\nprint(os.listdir('./'))"}
+{"python": "# Check current directory for available files\nimport os\nprint(os.listdir('./'))"}
