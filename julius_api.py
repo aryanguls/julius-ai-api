@@ -161,24 +161,85 @@ class ChatCompletions:
     def __init__(self, client):
         self.client = client
 
-    def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool):
-        """Send a message with support for multiple file attachments."""
+import requests
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
+from PIL import Image
+from io import BytesIO
+import json
+import sys
+
+class ChatCompletions:
+    def __init__(self, client):
+        self.client = client
+        self.code_counter = 0  # Global counter for code files
+
+    def _save_code_to_file(self, code: str) -> str:
+        """Save code to a txt file and return the filename."""
+        self.code_counter += 1  # Increment counter
+        filename = f"generated_code_{self.code_counter}.txt"
+        try:
+            with open(filename, 'w') as f:
+                f.write(code)
+            return filename
+        except Exception as e:
+            print(f"Error saving code: {str(e)}")
+            return None
+
+    def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict]]:
+        """Process a chunk from the stream and return content, function call, and images."""
+        content = chunk.get('content', '')
+        function_call = chunk.get('function_call', '')
+        
+        # Extract any image URLs from the chunk
+        images = {}
+        if 'image_urls_dict' in chunk:
+            images = chunk['image_urls_dict']
+        elif isinstance(function_call, dict) and 'arguments' in function_call:
+            try:
+                args = json.loads(function_call['arguments']) if isinstance(function_call['arguments'], str) else function_call['arguments']
+                if isinstance(args, dict) and 'url' in args:
+                    images[f"image_{len(images)}"] = args['url']
+            except json.JSONDecodeError:
+                pass
+                
+        return content, function_call, images
+
+    def _display_images(self, image_urls: Dict[str, str]):
+        """Download and display images in terminal if possible."""
+        try:
+            from PIL import Image
+            import requests
+            from io import BytesIO
+            
+            for img_id, url in image_urls.items():
+                response = requests.get(url)
+                if response.status_code == 200:
+                    print(f"\nImage {img_id} URL: {url}")
+                    img = Image.open(BytesIO(response.content))
+                    img.save(f"output_{img_id}.png")
+                    print(f"Image saved as output_{img_id}.png")
+        except Exception as e:
+            print(f"Error displaying images: {str(e)}")
+
+    def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool) -> Dict[str, Any]:
+        """Enhanced send_message with cleaner output handling."""
         try:
             headers = {
                 **self.client.headers,
                 "conversation-id": conversation_id
             }
 
+            # Handle file attachments
             new_attachments = {}
-            if "file_paths" in message:  # Changed from file_path to file_paths
-                for file_path in message["file_paths"]:  # Handle multiple files
+            if "file_paths" in message:
+                for file_path in message["file_paths"]:
                     filename = self.client.files.upload(file_path)
-                    time.sleep(2)
-                    register_response = self._register_file_source(conversation_id, filename)
+                    self._register_file_source(conversation_id, filename)
                     new_attachments[filename] = {
                         "name": filename,
                         "isUploading": False,
-                        "percentComplete": 100  # Added as seen in the request
+                        "percentComplete": 100
                     }
 
             payload = {
@@ -190,7 +251,7 @@ class ChatCompletions:
                 "dataframe_format": "json",
                 "new_attachments": new_attachments,
                 "new_images": [],
-                "selectedModels": None  # Added as seen in the request
+                "selectedModels": None
             }
 
             if current_reasoning_state:
@@ -204,7 +265,64 @@ class ChatCompletions:
             )
             
             response.raise_for_status()
-            return response
+            
+            # Enhanced output handling
+            current_content = ""
+            code_blocks = []
+            accumulated_function = ""
+            
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                    
+                try:
+                    chunk = json.loads(line.decode('utf-8'))
+                    content, function_call, images = self._process_stream_chunk(chunk)
+                    
+                    # Accumulate content without printing
+                    if content:
+                        current_content += content
+                        
+                    # Accumulate function calls
+                    if function_call:
+                        if isinstance(function_call, dict) and function_call.get('arguments'):
+                            # For code, accumulate silently
+                            if '"python":' in function_call['arguments']:
+                                accumulated_function += function_call['arguments']
+                    
+                    # Handle images silently
+                    if images:
+                        for img_id, url in images.items():
+                            current_content += f"\nImage saved: output_{img_id}.png\n"
+                            try:
+                                response = requests.get(url)
+                                if response.status_code == 200:
+                                    img = Image.open(BytesIO(response.content))
+                                    img.save(f"output_{img_id}.png")
+                            except Exception as e:
+                                current_content += f"\nError saving image: {str(e)}\n"
+                        
+                except json.JSONDecodeError:
+                    continue
+            
+            # Process accumulated code at the end
+            if accumulated_function:
+                try:
+                    filename = self._save_code_to_file(accumulated_function)
+                    current_content += f"\nCode saved to: {filename}\n"
+                    code_blocks.append((filename, accumulated_function))
+                except Exception as e:
+                    current_content += f"\nError saving code: {str(e)}\n"
+                    
+            return {
+                'content': current_content,
+                'code_blocks': code_blocks,
+                'metadata': {
+                    'conversation_id': conversation_id,
+                    'model': model,
+                    'timestamp': datetime.now().timestamp()
+                }
+            }
             
         except Exception as e:
             raise Exception(f"Error in send_message: {str(e)}")
@@ -264,7 +382,9 @@ class ChatCompletions:
             current_reasoning_state = False
             system_msg = None
             user_messages = []
+            final_content = ""
             
+            # Sort messages by type
             for msg in messages:
                 if msg["role"] == "system":
                     system_msg = msg
@@ -275,12 +395,15 @@ class ChatCompletions:
                 elif msg["role"] == "user":
                     user_messages.append(msg)
             
+            # Process system message if present
             if system_msg:
-                response = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
-                for line in response.iter_lines():
-                    continue
+                response_data = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
+                final_content += response_data['content']
+                if response_data.get('code_blocks'):
+                    for filename, code in response_data['code_blocks']:
+                        final_content += f"\nSystem code: {filename}"
             
-            final_content = ""
+            # Process user messages
             for user_msg in user_messages:
                 if "advanced_reasoning" in user_msg:
                     current_reasoning_state = user_msg["advanced_reasoning"]
@@ -289,19 +412,13 @@ class ChatCompletions:
                     else:
                         self.client.set_advanced_reasoning(False)
                 
-                response = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
-                
-                for line in response.iter_lines():
-                    if not line:
-                        continue
-                    try:
-                        chunk = json.loads(line.decode('utf-8'))
-                        if chunk.get("role") in ["assistant", ""]:
-                            if chunk_content := chunk.get("content", ""):
-                                final_content += chunk_content
-                    except json.JSONDecodeError:
-                        continue
+                response_data = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
+                final_content += response_data['content']
+                if response_data.get('code_blocks'):
+                    for filename, code in response_data['code_blocks']:
+                        final_content += f"\nGenerated code: {filename}"
 
+            # Create and return the final response
             return JuliusResponse(
                 id=conversation_id,
                 choices=[Choice(

@@ -14,7 +14,7 @@ if not JULIUS_TOKEN:
 julius = Julius(api_key=JULIUS_TOKEN)
 
 def main():
-    file_paths = ["eval_sets/NBA Stats 202425 All Metrics  NBA Player Props Tool.csv", "eval_sets/EDGE_GEOCODE_PUBLIC_FILEDOC.pdf", "eval_sets/Titanic.xlsx"]
+    file_paths = ["eval_sets/data-form-example.png"]
     
     try:
         # You can still upload files individually if needed
@@ -32,8 +32,8 @@ def main():
                 {"role": "system", "content": "You are a helpful data scientist analyzing documents."},
                 {
                     "role": "user",
-                    "content": f"Please analyze the file(s) I have shared and show any statistical similarities you see between these 2 different pieces of data.",
-                    "file_paths": file_paths,  # Changed from file_path to file_paths
+                    "content": f"Please analyze the file(s) I have shared and draw me a regression between sales and product type.",
+                    "file_paths": file_paths,
                     "advanced_reasoning": True
                 }
             ]
