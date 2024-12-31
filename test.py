@@ -14,7 +14,7 @@ if not JULIUS_TOKEN:
 julius = Julius(api_key=JULIUS_TOKEN)
 
 def main():
-    file_paths = ["eval_sets/data-form-example.png"]
+    file_paths = ["eval_sets/NBA Stats 202425 All Metrics  NBA Player Props Tool.csv"]
     
     try:
         # You can still upload files individually if needed
@@ -32,7 +32,7 @@ def main():
                 {"role": "system", "content": "You are a helpful data scientist analyzing documents."},
                 {
                     "role": "user",
-                    "content": f"Please analyze the file(s) I have shared and give me the 2 columns with highest correlation. Also draw me a bar graph with the product and sales.",
+                    "content": f"Please analyze the file(s) I have shared and give me the 2 columns with highest correlation. Also draw me a bar graph with the top 10 scorers and their PPG.",
                     "file_paths": file_paths,
                     "advanced_reasoning": True
                 }

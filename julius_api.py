@@ -180,16 +180,29 @@ class ChatCompletions:
         except Exception as e:
             print(f"Error saving code: {str(e)}")
             return None
+    
+    def _sanitize_code(self, code: str) -> str:
+        """Remove any double python key wrapping."""
+        try:
+            while isinstance(code, str) and code.startswith('{"python":'):
+                code = json.loads(code)["python"]
+        except json.JSONDecodeError:
+            pass
+        return code
 
     def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict]]:
         """Process a chunk from the stream and return content, function call, and images."""
         content = chunk.get('content', '')
         function_call = chunk.get('function_call', '')
+        outputs = chunk.get('outputs', [])  # Add this line to capture outputs
         
         # Extract any image URLs from the chunk
         images = {}
         if 'image_urls_dict' in chunk:
             images = chunk['image_urls_dict']
+        elif 'image_urls' in chunk:  # Add this to capture image_urls format
+            for i, url in enumerate(chunk['image_urls']):
+                images[f"image_{i}"] = url
         elif isinstance(function_call, dict) and 'arguments' in function_call:
             try:
                 args = json.loads(function_call['arguments']) if isinstance(function_call['arguments'], str) else function_call['arguments']
@@ -198,24 +211,7 @@ class ChatCompletions:
             except json.JSONDecodeError:
                 pass
                 
-        return content, function_call, images
-
-    def _display_images(self, image_urls: Dict[str, str]):
-        """Download and display images in terminal if possible."""
-        try:
-            from PIL import Image
-            import requests
-            from io import BytesIO
-            
-            for img_id, url in image_urls.items():
-                response = requests.get(url)
-                if response.status_code == 200:
-                    print(f"\nImage {img_id} URL: {url}")
-                    img = Image.open(BytesIO(response.content))
-                    img.save(f"output_{img_id}.png")
-                    print(f"Image saved as output_{img_id}.png")
-        except Exception as e:
-            print(f"Error displaying images: {str(e)}")
+        return content, function_call, images, outputs  # Return outputs too
 
     def _send_message(self, conversation_id: str, message: Dict[str, Any], model: str, current_reasoning_state: bool) -> Dict[str, Any]:
         """Enhanced send_message with cleaner output handling."""
@@ -261,10 +257,10 @@ class ChatCompletions:
             
             response.raise_for_status()
             
-            # Enhanced output handling
             current_content = ""
             code_blocks = []
             accumulated_function = ""
+            accumulated_output = ""
             
             for line in response.iter_lines():
                 if not line:
@@ -272,42 +268,55 @@ class ChatCompletions:
                     
                 try:
                     chunk = json.loads(line.decode('utf-8'))
-                    content, function_call, images = self._process_stream_chunk(chunk)
+                    content, function_call, images, outputs = self._process_stream_chunk(chunk)
                     
-                    # Accumulate content without printing
+                    # Handle outputs
+                    if outputs:
+                        accumulated_output += "\n".join(str(output) for output in outputs) + "\n"
+                    
+                    # Accumulate content 
                     if content:
                         current_content += content
                         
-                    # Accumulate function calls
+                    # Handle function calls
                     if function_call:
                         if isinstance(function_call, dict) and function_call.get('arguments'):
-                            # For code, accumulate silently
                             if '"python":' in function_call['arguments']:
                                 accumulated_function += function_call['arguments']
                     
-                    # Handle images silently
+                    # Handle images
                     if images:
+                        # Add image info to output
+                        accumulated_output += f"\nGenerated images:\n"
+                        # Ensure outputs directory exists
+                        os.makedirs("outputs", exist_ok=True)
+                        
                         for img_id, url in images.items():
-                            current_content += f"\nImage saved: output_{img_id}.png\n"
+                            accumulated_output += f"Image {img_id}: {url}\n"
                             try:
                                 response = requests.get(url)
                                 if response.status_code == 200:
                                     img = Image.open(BytesIO(response.content))
-                                    img.save(f"output_{img_id}.png")
+                                    # Save to outputs directory
+                                    save_path = os.path.join("outputs", f"output_{img_id}.png")
+                                    img.save(save_path)
+                                    accumulated_output += f"Saved as {save_path}\n"
                             except Exception as e:
-                                current_content += f"\nError saving image: {str(e)}\n"
-                        
+                                accumulated_output += f"Error saving image: {str(e)}\n"
+                                
                 except json.JSONDecodeError:
                     continue
             
             # Process accumulated code at the end
             if accumulated_function:
                 try:
-                    filename = self._save_code_to_file(accumulated_function)
-                    current_content += f"\nCode saved to: {filename}\n"
-                    code_blocks.append((filename, accumulated_function))
+                    code_filename = self._save_code_to_file(accumulated_function)
+                    output_filename = self._save_output_to_file(accumulated_output)
+                    current_content += f"\nCode saved to: {code_filename}\n"
+                    current_content += f"\nOutput saved to: {output_filename}\n"
+                    code_blocks.append((code_filename, accumulated_function, output_filename, accumulated_output))
                 except Exception as e:
-                    current_content += f"\nError saving code: {str(e)}\n"
+                    current_content += f"\nError saving code/output: {str(e)}\n"
                     
             return {
                 'content': current_content,
@@ -441,10 +450,6 @@ class Julius:
             "Origin": "https://julius.ai"
         }
         self.files = Files(self)
-        try:
-            self.subscription = self._get_subscription()
-        except Exception:
-            self.subscription = None
         self.chat = type('Chat', (), {'completions': ChatCompletions(self)})()
 
     def set_advanced_reasoning(self, enabled: bool = True):
@@ -463,24 +468,3 @@ class Julius:
             return response.json()
         except Exception as e:
             raise Exception(f"Failed to set advanced reasoning: {str(e)}")
-
-    def _get_subscription(self) -> JuliusSubscription:
-        """Get current subscription details."""
-        try:
-            response = requests.get(
-                f"{self.base_url}/api/user/subscription",
-                headers=self.headers
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            return JuliusSubscription(
-                plan=data.get('plan', 'Free'),
-                status=data.get('status', 'inactive'),
-                billing_cycle=data.get('billing_cycle', ''),
-                percent_off=data.get('percent_off', 0),
-                expires_at=data.get('expires_at', 0),
-                next_tier_name=data.get('next_tier_name')
-            )
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Error getting subscription: {str(e)}")
