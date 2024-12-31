@@ -8,6 +8,9 @@ from datetime import datetime
 import os
 import mimetypes
 import time
+from PIL import Image
+from io import BytesIO
+import sys
 
 # Actual model names from Julius
 ModelType = Literal["default", "GPT-4o", "gpt-4o-mini", "o1-mini", "claude-3-5-sonnet", "o1", "gemini", "cohere"]
@@ -157,17 +160,6 @@ class Files:
         except Exception as e:
             raise Exception(f"Error in file upload process: {str(e)}")
 
-class ChatCompletions:
-    def __init__(self, client):
-        self.client = client
-
-import requests
-from dataclasses import dataclass
-from typing import Optional, Dict, Any
-from PIL import Image
-from io import BytesIO
-import json
-import sys
 
 class ChatCompletions:
     def __init__(self, client):
@@ -176,8 +168,11 @@ class ChatCompletions:
 
     def _save_code_to_file(self, code: str) -> str:
         """Save code to a txt file and return the filename."""
+        folder_path = "./outputs"
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
         self.code_counter += 1  # Increment counter
-        filename = f"generated_code_{self.code_counter}.txt"
+        filename = f"outputs/generated_code_{self.code_counter}.txt"
         try:
             with open(filename, 'w') as f:
                 f.write(code)

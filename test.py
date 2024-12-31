@@ -32,7 +32,7 @@ def main():
                 {"role": "system", "content": "You are a helpful data scientist analyzing documents."},
                 {
                     "role": "user",
-                    "content": f"Please analyze the file(s) I have shared and draw me a regression between sales and product type.",
+                    "content": f"Please analyze the file(s) I have shared and give me the 2 columns with highest correlation. Also draw me a bar graph with the product and sales.",
                     "file_paths": file_paths,
                     "advanced_reasoning": True
                 }
