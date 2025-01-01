@@ -29,7 +29,7 @@ def main():
         response = julius.chat.completions.create(
             model="default",
             messages=[
-                {"role": "system", "content": "You are a helpful data scientist analyzing documents."},
+                # {"role": "system", "content": "You are a helpful data scientist analyzing documents."},
                 {
                     "role": "user",
                     "content": f"Please analyze the file(s) I have shared and give me the 2 columns with highest correlation. Also draw me a bar graph with the top 10 scorers and their PPG.",
