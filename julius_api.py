@@ -219,6 +219,19 @@ class ChatCompletions:
         # Reset the code counter since we're starting fresh
         self.code_counter = 0
 
+    def _format_terminal_output(self, content: str, code_blocks: list) -> str:
+        """Format the terminal output to be clean and readable."""
+        # Clean up any literal \n strings and get the main content
+        final_content = content.replace('\\n', '\n')
+        
+        # Add file notifications
+        if code_blocks:
+            for code_filename, _, output_filename, _ in code_blocks:
+                final_content += f"\n\nCode Generated: {code_filename}"
+                final_content += f"\nOutput Generated: {output_filename}"
+        
+        return final_content
+
     def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict], List]:
         """Process a chunk from the stream and return content, function call, images, and outputs."""
         content = chunk.get('content', '')
@@ -414,14 +427,17 @@ class ChatCompletions:
                         accumulated_function, 
                         accumulated_outputs
                     )
-                    current_content += f"\nCode saved to: {code_filename}\n"
-                    current_content += f"Output saved to: {output_filename}\n"
+                    # current_content += f"\nCode saved to: {code_filename}\n"
+                    # current_content += f"Output saved to: {output_filename}\n"
                     code_blocks.append((code_filename, accumulated_function, output_filename, accumulated_outputs))
                 except Exception as e:
                     current_content += f"\nError saving code/output: {str(e)}\n"
+
+            # Format the content before returning
+            formatted_content = self._format_terminal_output(current_content, code_blocks)
                     
             return {
-                'content': current_content,
+                'content': formatted_content,
                 'code_blocks': code_blocks,
                 'metadata': {
                     'conversation_id': conversation_id,
@@ -508,10 +524,6 @@ class ChatCompletions:
             if system_msg:
                 response_data = self._send_message(conversation_id, system_msg, model, current_reasoning_state)
                 final_content += response_data['content']
-                if response_data.get('code_blocks'):
-                    for code_filename, code, output_filename, outputs in response_data['code_blocks']:
-                        final_content += f"\nSystem code: {code_filename}"
-                        final_content += f"\nSystem output: {output_filename}"
             
             # Process user messages
             for user_msg in user_messages:
@@ -524,10 +536,6 @@ class ChatCompletions:
                 
                 response_data = self._send_message(conversation_id, user_msg, model, current_reasoning_state)
                 final_content += response_data['content']
-                if response_data.get('code_blocks'):
-                    for code_filename, code, output_filename, outputs in response_data['code_blocks']:
-                        final_content += f"\nGenerated code: {code_filename}"
-                        final_content += f"\nOutput file: {output_filename}"
 
             # Create and return the final response
             return JuliusResponse(
