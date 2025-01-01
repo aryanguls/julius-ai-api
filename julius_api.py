@@ -171,13 +171,13 @@ class ChatCompletions:
         folder_path = "./outputs"
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
-            
+                
         self.code_counter += 1
         
-        # Save code file with python key
+        # Save code file - code already comes with python key wrapping
         code_filename = f"outputs/generated_code_{self.code_counter}.txt"
         with open(code_filename, 'w') as f:
-            f.write(json.dumps({"python": self._sanitize_code(code)}))
+            f.write(code)  # Write the code as-is since it's already wrapped
         
         # Process and deduplicate outputs
         processed_outputs = []
@@ -195,8 +195,29 @@ class ChatCompletions:
         output_filename = f"outputs/generated_output_{self.code_counter}.txt"
         with open(output_filename, 'w') as f:
             f.write(json.dumps({"output": processed_outputs}, indent=2))
-            
+                
         return code_filename, output_filename
+    
+    def _cleanup_outputs_directory(self):
+        """Clean up the outputs directory by removing and recreating it."""
+        import shutil
+        output_dir = "./outputs"
+        
+        # Remove the directory and its contents if it exists
+        if os.path.exists(output_dir):
+            try:
+                shutil.rmtree(output_dir)
+            except Exception as e:
+                raise Exception(f"Failed to clean outputs directory: {str(e)}")
+        
+        # Create fresh outputs directory
+        try:
+            os.makedirs(output_dir)
+        except Exception as e:
+            raise Exception(f"Failed to create outputs directory: {str(e)}")
+        
+        # Reset the code counter since we're starting fresh
+        self.code_counter = 0
 
     def _process_stream_chunk(self, chunk: Dict[str, Any]) -> tuple[str, Optional[str], Optional[Dict], List]:
         """Process a chunk from the stream and return content, function call, images, and outputs."""
@@ -463,6 +484,9 @@ class ChatCompletions:
     def create(self, messages: List[Dict[str, Any]], model: ModelType = "default", **kwargs) -> JuliusResponse:
         """Create a chat completion."""
         try:
+            # Clean up outputs directory at the start of each chat session
+            self._cleanup_outputs_directory()
+
             conversation_id = self._start_conversation(model)
             current_reasoning_state = False
             system_msg = None

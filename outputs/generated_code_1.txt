@@ -1,1 +1,1 @@
-{"python": "# Check current directory for available files\nimport os\nprint(os.listdir('./'))"}
+{"python":"import os\n\n# List all files in the current directory to check for uploaded documents\nuploaded_files = os.listdir()\nprint(uploaded_files)"}
